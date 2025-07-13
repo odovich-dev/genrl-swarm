@@ -9,7 +9,7 @@ from typing import Any, List
 import torch
 import torch.utils.data
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, BitsAndBytesConfig
-from trl.data_utils import apply_chat_template
+from trl.data_utils import apply_chat_template # This is the function causing the error
 from trl.models import create_reference_model
 from trl.trainer.grpo_config import GRPOConfig
 
@@ -279,7 +279,8 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             # Apply chat template if required (for new prompts)
             if with_template:
                 chat_history = [{"role": "user", "content": text_content}] # Simple user role assumption
-                formatted_prompt = apply_chat_template(chat_history, self.processing_class, tokenize=False, add_generation_prompt=True)["prompt"]
+                # --- FIX: Removed 'tokenize=False' from apply_chat_template ---
+                formatted_prompt = apply_chat_template(chat_history, self.processing_class, add_generation_prompt=True)["prompt"]
                 templated_items.append(formatted_prompt)
             else:
                 # If no templating, assume text_content is the direct input to be tokenized/used
@@ -598,7 +599,7 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
         # This loop runs `len(stage_inputs_raw_batch)` times.
         for i, prompt_item in enumerate(stage_inputs_raw_batch):
             # Get the formatted prompt string using chat template
-            formatted_prompt_str = apply_chat_template(prompt_item, self.processing_class, tokenize=False, add_generation_prompt=True)["prompt"]
+            formatted_prompt_str = apply_chat_template(prompt_item, self.processing_class, add_generation_prompt=True)["prompt"]
             
             # Tokenize this single prompt temporarily to get its actual length before padding
             temp_prompt_tokens = self.processing_class(
