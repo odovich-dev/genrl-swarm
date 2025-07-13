@@ -9,7 +9,7 @@ from typing import Any, List
 import torch
 import torch.utils.data
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, BitsAndBytesConfig
-from trl.data_utils import apply_chat_template
+# REMOVED from trl.data_utils import apply_chat_template # We will use tokenizer's method directly
 from trl.models import create_reference_model
 from trl.trainer.grpo_config import GRPOConfig
 
@@ -278,19 +278,31 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             
             # Apply chat template if required (for new prompts)
             if with_template:
-                chat_history = [{"role": "user", "content": text_content}] # Simple user role assumption
-                # --- FIX: Removed 'tokenize=False' and 'add_generation_prompt=True' ---
-                # Check for `add_generation_prompt` support
+                chat_history = [{"role": "user", "content": text_content}] # This is a list of dictionaries
+                
+                # --- FIX: Directly use self.processing_class.apply_chat_template ---
+                # This bypasses the problematic trl.data_utils.apply_chat_template version
+                # The tokenizer's method typically expects a list of dicts for chat_history
+                # and supports add_generation_prompt and tokenize args.
                 try:
-                    # Attempt call with add_generation_prompt
-                    formatted_prompt = apply_chat_template(chat_history, self.processing_class, add_generation_prompt=True)["prompt"]
+                    formatted_prompt = self.processing_class.apply_chat_template(
+                        chat_history, 
+                        tokenize=False, # We usually want string output from templating
+                        add_generation_prompt=True # Re-add if tokenizer supports it
+                    )
                 except TypeError as e:
-                    if "'add_generation_prompt'" in str(e):
-                        warnings.warn(f"apply_chat_template does not support 'add_generation_prompt'. Using without it. Error: {e}")
-                        formatted_prompt = apply_chat_template(chat_history, self.processing_class)["prompt"]
+                    if "'tokenize'" in str(e) or "'add_generation_prompt'" in str(e):
+                        warnings.warn(f"Tokenizer's apply_chat_template does not support 'tokenize' or 'add_generation_prompt'. Trying without. Error: {e}")
+                        try:
+                            # Fallback if specific args are not supported by the tokenizer's method
+                            formatted_prompt = self.processing_class.apply_chat_template(chat_history)
+                        except Exception as inner_e:
+                            raise TypeError(f"Tokenizer's apply_chat_template failed even with minimal args. Check your transformers version or chat_history format. Error: {inner_e}")
                     else:
                         raise # Re-raise if it's a different TypeError
-                
+
+                # The tokenizer's apply_chat_template returns a string, not a dict with a 'prompt' key
+                # So no ["prompt"] needed if using tokenizer.apply_chat_template directly
                 templated_items.append(formatted_prompt)
             else:
                 # If no templating, assume text_content is the direct input to be tokenized/used
@@ -406,7 +418,7 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
                 # If no completion tokens, return an empty tensor of correct batch size
                 return torch.empty(input_ids.shape[0], 0, device=input_ids.device, dtype=torch.float32)
 
-            logits = logits[:, -logits_to_keep:] # (Batch_size, logits_to_keep, Vocab_size)
+            logits = logits[:, -logits_to_to_keep:] # (Batch_size, logits_to_keep, Vocab_size)
             labels = labels[:, -logits_to_keep:] # (Batch_size, logits_to_keep)
             loss_mask = loss_mask[:, -logits_to_keep:] # (Batch_size, logits_to_keep)
 
@@ -609,8 +621,13 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
         # This loop runs `len(stage_inputs_raw_batch)` times.
         for i, prompt_item in enumerate(stage_inputs_raw_batch):
             # Get the formatted prompt string using chat template
-            # --- FIX: Removed 'add_generation_prompt=True' ---
-            formatted_prompt_str = apply_chat_template(prompt_item, self.processing_class)["prompt"]
+            # --- FIX: Removed 'add_generation_prompt=True' and `tokenize=False` from `_process_inputs` call
+            # Now, using tokenizer's apply_chat_template directly
+            formatted_prompt_str = self.processing_class.apply_chat_template(
+                [{"role": "user", "content": prompt_item.get("prompt") or prompt_item.get("content") or prompt_item}], # Ensure content is from item or default to empty
+                tokenize=False, # We want the string output
+                add_generation_prompt=True # Re-add if tokenizer supports it
+            )
             
             # Tokenize this single prompt temporarily to get its actual length before padding
             temp_prompt_tokens = self.processing_class(
