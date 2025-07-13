@@ -279,8 +279,8 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             # Apply chat template if required (for new prompts)
             if with_template:
                 chat_history = [{"role": "user", "content": text_content}] # Simple user role assumption
-                # --- FIX: Removed 'tokenize=False' from apply_chat_template ---
-                formatted_prompt = apply_chat_template(chat_history, self.processing_class, add_generation_prompt=True)["prompt"]
+                # --- FIX: Removed 'tokenize=False' and 'add_generation_prompt=True' ---
+                formatted_prompt = apply_chat_template(chat_history, self.processing_class)["prompt"]
                 templated_items.append(formatted_prompt)
             else:
                 # If no templating, assume text_content is the direct input to be tokenized/used
@@ -599,7 +599,8 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
         # This loop runs `len(stage_inputs_raw_batch)` times.
         for i, prompt_item in enumerate(stage_inputs_raw_batch):
             # Get the formatted prompt string using chat template
-            formatted_prompt_str = apply_chat_template(prompt_item, self.processing_class, add_generation_prompt=True)["prompt"]
+            # --- FIX: Removed 'add_generation_prompt=True' ---
+            formatted_prompt_str = apply_chat_template(prompt_item, self.processing_class)["prompt"]
             
             # Tokenize this single prompt temporarily to get its actual length before padding
             temp_prompt_tokens = self.processing_class(
