@@ -9,7 +9,7 @@ from typing import Any, List
 import torch
 import torch.utils.data
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, BitsAndBytesConfig
-from trl.data_utils import apply_chat_template # This is the function causing the error
+from trl.data_utils import apply_chat_template
 from trl.models import create_reference_model
 from trl.trainer.grpo_config import GRPOConfig
 
@@ -280,7 +280,17 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             if with_template:
                 chat_history = [{"role": "user", "content": text_content}] # Simple user role assumption
                 # --- FIX: Removed 'tokenize=False' and 'add_generation_prompt=True' ---
-                formatted_prompt = apply_chat_template(chat_history, self.processing_class)["prompt"]
+                # Check for `add_generation_prompt` support
+                try:
+                    # Attempt call with add_generation_prompt
+                    formatted_prompt = apply_chat_template(chat_history, self.processing_class, add_generation_prompt=True)["prompt"]
+                except TypeError as e:
+                    if "'add_generation_prompt'" in str(e):
+                        warnings.warn(f"apply_chat_template does not support 'add_generation_prompt'. Using without it. Error: {e}")
+                        formatted_prompt = apply_chat_template(chat_history, self.processing_class)["prompt"]
+                    else:
+                        raise # Re-raise if it's a different TypeError
+                
                 templated_items.append(formatted_prompt)
             else:
                 # If no templating, assume text_content is the direct input to be tokenized/used
