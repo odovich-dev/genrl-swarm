@@ -9,7 +9,7 @@ from typing import Any, List
 import torch
 import torch.utils.data
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, BitsAndBytesConfig
-# REMOVED from trl.data_utils import apply_chat_template # We will use tokenizer's method directly
+from trl.data_utils import apply_chat_template
 from trl.models import create_reference_model
 from trl.trainer.grpo_config import GRPOConfig
 
@@ -280,29 +280,26 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             if with_template:
                 chat_history = [{"role": "user", "content": text_content}] # This is a list of dictionaries
                 
-                # --- FIX: Directly use self.processing_class.apply_chat_template ---
+                # --- FIX: Directly use self.processing_class.apply_chat_template and handle its return ---
                 # This bypasses the problematic trl.data_utils.apply_chat_template version
-                # The tokenizer's method typically expects a list of dicts for chat_history
-                # and supports add_generation_prompt and tokenize args.
+                # The tokenizer's method expects a list of dicts for chat_history and returns a string
                 try:
                     formatted_prompt = self.processing_class.apply_chat_template(
                         chat_history, 
-                        tokenize=False, # We usually want string output from templating
+                        tokenize=False, # We want the string output
                         add_generation_prompt=True # Re-add if tokenizer supports it
                     )
                 except TypeError as e:
+                    # Fallback for older tokenizer versions that don't support `tokenize` or `add_generation_prompt`
                     if "'tokenize'" in str(e) or "'add_generation_prompt'" in str(e):
                         warnings.warn(f"Tokenizer's apply_chat_template does not support 'tokenize' or 'add_generation_prompt'. Trying without. Error: {e}")
                         try:
-                            # Fallback if specific args are not supported by the tokenizer's method
                             formatted_prompt = self.processing_class.apply_chat_template(chat_history)
                         except Exception as inner_e:
                             raise TypeError(f"Tokenizer's apply_chat_template failed even with minimal args. Check your transformers version or chat_history format. Error: {inner_e}")
                     else:
                         raise # Re-raise if it's a different TypeError
-
-                # The tokenizer's apply_chat_template returns a string, not a dict with a 'prompt' key
-                # So no ["prompt"] needed if using tokenizer.apply_chat_template directly
+                
                 templated_items.append(formatted_prompt)
             else:
                 # If no templating, assume text_content is the direct input to be tokenized/used
@@ -418,7 +415,7 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
                 # If no completion tokens, return an empty tensor of correct batch size
                 return torch.empty(input_ids.shape[0], 0, device=input_ids.device, dtype=torch.float32)
 
-            logits = logits[:, -logits_to_to_keep:] # (Batch_size, logits_to_keep, Vocab_size)
+            logits = logits[:, -logits_to_keep:] # (Batch_size, logits_to_keep, Vocab_size)
             labels = labels[:, -logits_to_keep:] # (Batch_size, logits_to_keep)
             loss_mask = loss_mask[:, -logits_to_keep:] # (Batch_size, logits_to_keep)
 
@@ -623,11 +620,44 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             # Get the formatted prompt string using chat template
             # --- FIX: Removed 'add_generation_prompt=True' and `tokenize=False` from `_process_inputs` call
             # Now, using tokenizer's apply_chat_template directly
-            formatted_prompt_str = self.processing_class.apply_chat_template(
-                [{"role": "user", "content": prompt_item.get("prompt") or prompt_item.get("content") or prompt_item}], # Ensure content is from item or default to empty
-                tokenize=False, # We want the string output
-                add_generation_prompt=True # Re-add if tokenizer supports it
-            )
+            # The apply_chat_template takes `chat_history` (list of dicts).
+            # The `prompt_item` could be a dict like {'prompt': '...', 'rewards': ...} or similar.
+            # We need to extract the actual text content for the chat history.
+            
+            text_content_for_templating = ""
+            if isinstance(prompt_item, str):
+                text_content_for_templating = prompt_item
+            elif isinstance(prompt_item, dict):
+                text_content_for_templating = prompt_item.get("prompt") or prompt_item.get("content")
+                if text_content_for_templating is None:
+                    raise ValueError(f"Prompt item dictionary must have a 'prompt' or 'content' key. Found: {prompt_item.keys()}")
+                if isinstance(text_content_for_templating, list):
+                    text_content_for_templating = "\n".join(map(str, text_content_for_templating))
+            else:
+                raise TypeError(f"Unsupported prompt item type for chat templating: {type(prompt_item)}")
+
+            chat_history_for_tokenizer = [{"role": "user", "content": text_content_for_templating}]
+
+            try:
+                # Assuming the tokenizer's apply_chat_template is standard (takes list of dicts, returns string)
+                formatted_prompt_str = self.processing_class.apply_chat_template(
+                    chat_history_for_tokenizer, 
+                    tokenize=False, # We want the string output for concatenation
+                    add_generation_prompt=True # Re-add if tokenizer supports it
+                )
+            except TypeError as e:
+                # Fallback for very old tokenizer versions that don't support `tokenize` or `add_generation_prompt`
+                if ("'tokenize'" in str(e) or "'add_generation_prompt'" in str(e) or 
+                    "'list' object has no attribute 'keys'" in str(e) or "'dict' object has no attribute 'keys'" in str(e)):
+                    warnings.warn(f"Tokenizer's apply_chat_template failed with expected args. Trying without problematic args. Error: {e}")
+                    try:
+                        # Attempt with minimal args: just chat history.
+                        # This fallback is for extremely old `transformers` versions or highly custom setups.
+                        formatted_prompt_str = self.processing_class.apply_chat_template(chat_history_for_tokenizer)
+                    except Exception as inner_e:
+                        raise TypeError(f"Tokenizer's apply_chat_template failed even with minimal args. Check your transformers version or chat_history format. Original Error: {e}, Inner Error: {inner_e}")
+                else:
+                    raise # Re-raise if it's a different TypeError
             
             # Tokenize this single prompt temporarily to get its actual length before padding
             temp_prompt_tokens = self.processing_class(
