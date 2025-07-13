@@ -387,7 +387,7 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
             processed_outputs.attention_mask.to(self.model.device),
         )
 
-        # Fix reward shape and add participation bonus
+        # Fix reward shape
         rewards_from_manager = reward_manager[stage] 
         rewards_list_for_tensor = []
 
