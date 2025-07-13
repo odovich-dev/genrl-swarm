@@ -169,8 +169,6 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
     def train(
         self, state: GameState, data_manager: DataManager, reward_manager: RewardManager
     ) -> None:
-        # ‼️ KEY FIX: Removed the print statement as requested.
-        # The script will still correctly skip training in vLLM mode to prevent crashing.
         if self.use_vllm:
             return
         self.model.train()
@@ -390,32 +388,49 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
         )
 
         # Fix reward shape and add participation bonus
-        rewards = reward_manager[stage]
-        rewards = [
-            rewards[index_mapping[idx][0]][index_mapping[idx][1]][index_mapping[idx][2]]
-            for idx, _ in enumerate(index_mapping)
-        ]
-        rewards_2d = []
-        for r in rewards:
+        rewards_from_manager = reward_manager[stage] 
+        rewards_list_for_tensor = []
+
+        for original_idx, _ in enumerate(index_mapping):
+            r = rewards_from_manager[index_mapping[original_idx][0]][index_mapping[original_idx][1]][index_mapping[original_idx][2]]
+
+            current_rewards_for_item = []
             if isinstance(r, (int, float)):
                 # Add base participation reward (e.g., 1 point per round) and performance
                 base_reward = 1.0
                 perf_reward = max(0, r)  # Ensure non-negative performance reward
-                rewards_2d.append([base_reward + perf_reward] * self.num_generations)
-            elif len(r) == 1:
-                rewards_2d.append([1.0 + r[0]] * self.num_generations)
+                # Ensure we append self.num_generations rewards
+                current_rewards_for_item = [base_reward + perf_reward] * self.num_generations
+            elif isinstance(r, list):
+                # If it's already a list, take up to num_generations values
+                # and add base reward. Pad with 1.0 if not enough.
+                for i in range(self.num_generations):
+                    if i < len(r):
+                        current_rewards_for_item.append(1.0 + r[i])
+                    else:
+                        current_rewards_for_item.append(1.0) # Default participation if no specific reward
             else:
-                rewards_2d.append([1.0 + val for val in r[:self.num_generations]])
-        rewards = torch.tensor(rewards_2d)
+                raise TypeError(f"Unsupported reward type: {type(r)}")
 
+            # Ensure the list has exactly self.num_generations elements
+            while len(current_rewards_for_item) < self.num_generations:
+                current_rewards_for_item.append(1.0) # Pad with participation reward
+
+            rewards_list_for_tensor.append(current_rewards_for_item)
+
+        rewards = torch.tensor(rewards_list_for_tensor, dtype=torch.float32) 
+        
         assert rewards is not None, f"No rewards found for stage {stage}"
         assert rewards.dim() == 2 and rewards.size(1) == self.num_generations, \
             f"Rewards shape {rewards.shape} does not match expected [batch_size, {self.num_generations}]"
 
         with torch.no_grad():
             advantages = rewards - rewards.mean(dim=1, keepdim=True)
-            if rewards.shape[1] > 1:
+            if rewards.shape[1] > 1: 
                 advantages /= rewards.std(dim=1, keepdim=True) + 1e-8
+            else: 
+                pass 
+
         advantages = torch.flatten(advantages).to(self.model.device)
         model_inputs["advantages"] = advantages.squeeze(dim=-1)
         model_inputs["old_per_token_logps"] = None
@@ -473,3 +488,4 @@ class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
 
     def cleanup(self):
         self.cleanup_trackers()
+
