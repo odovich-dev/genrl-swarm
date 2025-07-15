@@ -1,31 +1,32 @@
-import contextlib﻿
-import gc﻿
-import os﻿
-from collections import defaultdict﻿
-from typing import Any, List﻿
-import torch﻿
-import torch.utils.data﻿
-from transformers import (﻿
-    AutoModelForCausalLM,﻿
-    AutoTokenizer,﻿
-    GenerationConfig,﻿
-    BitsAndBytesConfig,﻿
-)﻿
-from trl.models import create_reference_model﻿
-from trl.trainer.grpo_config import GRPOConfig﻿
-from genrl.data import DataManager﻿
-from genrl.logging_utils.ml_logger import LoggerMixin﻿
-from genrl.rewards import RewardManager﻿
-from genrl.state import GameState﻿
-from genrl.trainer import TrainerModule﻿
-class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):﻿
-    """﻿
-    Unified Trainer for GRPO, supporting both standard training and vLLM inference.﻿
-    """﻿
-    def __init__(self, models: List[Any], **kwargs):﻿
-        """﻿
-        Initialize the trainer module.﻿
-        Can be configured for vLLM inference or standard GRPO training.﻿
+import contextlib
+import gc
+import os
+from collections import defaultdict
+from typing import Any, List
+import torch
+import torch.utils.data
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    GenerationConfig,
+    BitsAndBytesConfig,
+)
+from trl.models import create_reference_model
+from trl.trainer.grpo_config import GRPOConfig
+from genrl.data import DataManager
+from genrl.logging_utils.ml_logger import LoggerMixin
+from genrl.rewards import RewardManager
+from genrl.state import GameState
+from genrl.trainer import TrainerModule
+
+class GRPOLanguageTrainerModule(TrainerModule, LoggerMixin):
+    """
+    Unified Trainer for GRPO, supporting both standard training and vLLM inference.
+    """
+    def __init__(self, models: List[Any], **kwargs):
+        """
+        Initialize the trainer module.
+        Can be configured for vLLM inference or standard GRPO training.
         """﻿
         # --- Common Configuration ---﻿
         self.use_vllm = kwargs.get("use_vllm", False)﻿
